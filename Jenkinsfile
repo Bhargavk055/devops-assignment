@@ -2,8 +2,8 @@
 pipeline {
   agent any
   environment {
-    DOCKERHUB_CREDENTIALS = 'dockerhub-creds' // set this credential in Jenkins (username/password)
-    DOCKERHUB_REPO = 'yourdockerhubusername/flask-app' // change to your Docker Hub repo
+  DOCKERHUB_CREDENTIALS = 'dockerhub-creds' // set this credential in Jenkins (username/password)
+  DOCKERHUB_REPO = 'bhargavk055/devops-assignment' // Docker Hub repo (username/repo)
     IMAGE_TAG = "${env.BUILD_NUMBER}"
   }
   stages {
