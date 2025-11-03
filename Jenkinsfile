@@ -62,9 +62,10 @@ pipeline {
             echo "POSIX shell steps failed or not available, using Windows bat fallback: ${err}"
             bat 'docker network create jenkins-test-net || exit 0'
             bat 'docker run -d --name jenkins-test-db --network jenkins-test-net -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=appdb -e MYSQL_USER=appuser -e MYSQL_PASSWORD=apppassword mysql:8.0'
-            bat 'timeout /t 10 /nobreak >nul'
+            // Use PowerShell Start-Sleep instead of timeout to avoid redirection errors in Jenkins
+            bat 'powershell -Command "Start-Sleep -Seconds 10"'
             bat "docker run -d --name jenkins-test-app --network jenkins-test-net -e DB_HOST=jenkins-test-db -e DB_USER=appuser -e DB_PASSWORD=apppassword -e DB_NAME=appdb ${DOCKERHUB_REPO}:${IMAGE_TAG} || exit 0"
-            bat 'timeout /t 5 /nobreak >nul'
+            bat 'powershell -Command "Start-Sleep -Seconds 5"'
             bat 'docker run --network jenkins-test-net --rm curlimages/curl:8.2.1 -sSf http://jenkins-test-app:5000 || exit 0'
             bat 'docker rm -f jenkins-test-app jenkins-test-db || exit 0'
             bat 'docker network rm jenkins-test-net || exit 0'
