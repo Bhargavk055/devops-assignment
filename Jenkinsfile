@@ -48,27 +48,55 @@ pipeline {
     stage('Smoke Test') {
       steps {
         script {
-          // Run the smoke test; prefer sh but fall back to bat when sh is not present
+          // Idempotent smoke test: non-fatal — failures will be logged but won't stop the pipeline
+          def net = "jenkins-test-net-${env.IMAGE_TAG}"
+          def dbName = "jenkins-test-db-${env.IMAGE_TAG}"
+          def appName = "jenkins-test-app-${env.IMAGE_TAG}"
+
+          // helper to try POSIX, else Windows
+          def run = { posixCmd, winCmd ->
+            try { sh posixCmd } catch (e) { echo "sh not available/runnable: ${e}"; bat winCmd }
+          }
+
+          // default to false; set to 'true' only on successful smoke test
+          env.SMOKE_OK = 'false'
+
           try {
-            sh 'docker network create jenkins-test-net || true'
-            sh 'docker run -d --name jenkins-test-db --network jenkins-test-net -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=appdb -e MYSQL_USER=appuser -e MYSQL_PASSWORD=apppassword mysql:8.0'
-            sh 'sleep 10'
-            sh "docker run -d --name jenkins-test-app --network jenkins-test-net -e DB_HOST=jenkins-test-db -e DB_USER=appuser -e DB_PASSWORD=apppassword -e DB_NAME=appdb ${DOCKERHUB_REPO}:${IMAGE_TAG} || true"
-            sh 'sleep 5'
-            sh 'docker run --network jenkins-test-net --rm curlimages/curl:8.2.1 -sSf http://jenkins-test-app:5000 || true'
-            sh 'docker rm -f jenkins-test-app jenkins-test-db || true'
-            sh 'docker network rm jenkins-test-net || true'
+            // pre-clean
+            run("docker rm -f ${appName} ${dbName} || true", "docker rm -f ${appName} ${dbName} || exit 0")
+            run("docker network rm ${net} || true", "docker network rm ${net} || exit 0")
+
+            // create network
+            run("docker network create ${net} || true", "docker network create ${net} || exit 0")
+
+            // start DB
+            run("docker run -d --name ${dbName} --network ${net} -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=appdb -e MYSQL_USER=appuser -e MYSQL_PASSWORD=apppassword mysql:8.0",
+                "docker run -d --name ${dbName} --network ${net} -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=appdb -e MYSQL_USER=appuser -e MYSQL_PASSWORD=apppassword mysql:8.0")
+
+            // wait for DB
+            run('sleep 10', 'powershell -Command "Start-Sleep -Seconds 10"')
+
+            // start app
+            run("docker run -d --name ${appName} --network ${net} -e DB_HOST=${dbName} -e DB_USER=appuser -e DB_PASSWORD=apppassword -e DB_NAME=appdb ${DOCKERHUB_REPO}:${IMAGE_TAG}",
+                "docker run -d --name ${appName} --network ${net} -e DB_HOST=${dbName} -e DB_USER=appuser -e DB_PASSWORD=apppassword -e DB_NAME=appdb ${DOCKERHUB_REPO}:${IMAGE_TAG}")
+
+            // wait for app
+            run('sleep 5', 'powershell -Command "Start-Sleep -Seconds 5"')
+
+            // smoke test HTTP on app
+            run("docker run --network ${net} --rm curlimages/curl:8.2.1 -sSf http://${appName}:5000",
+                "docker run --network ${net} --rm curlimages/curl:8.2.1 -sSf http://${appName}:5000")
+
+            // mark smoke test success
+            env.SMOKE_OK = 'true'
+
           } catch (err) {
-            echo "POSIX shell steps failed or not available, using Windows bat fallback: ${err}"
-            bat 'docker network create jenkins-test-net || exit 0'
-            bat 'docker run -d --name jenkins-test-db --network jenkins-test-net -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=appdb -e MYSQL_USER=appuser -e MYSQL_PASSWORD=apppassword mysql:8.0'
-            // Use PowerShell Start-Sleep instead of timeout to avoid redirection errors in Jenkins
-            bat 'powershell -Command "Start-Sleep -Seconds 10"'
-            bat "docker run -d --name jenkins-test-app --network jenkins-test-net -e DB_HOST=jenkins-test-db -e DB_USER=appuser -e DB_PASSWORD=apppassword -e DB_NAME=appdb ${DOCKERHUB_REPO}:${IMAGE_TAG} || exit 0"
-            bat 'powershell -Command "Start-Sleep -Seconds 5"'
-            bat 'docker run --network jenkins-test-net --rm curlimages/curl:8.2.1 -sSf http://jenkins-test-app:5000 || exit 0'
-            bat 'docker rm -f jenkins-test-app jenkins-test-db || exit 0'
-            bat 'docker network rm jenkins-test-net || exit 0'
+            // don't fail the pipeline for smoke test failures — log and continue to Push
+            echo "Smoke test failed (non-fatal): ${err}"
+          } finally {
+            // clean up (best-effort)
+            run("docker rm -f ${appName} ${dbName} || true", "docker rm -f ${appName} ${dbName} || exit 0")
+            run("docker network rm ${net} || true", "docker network rm ${net} || exit 0")
           }
         }
       }
